@@ -1,3 +1,8 @@
+26.7.47 (156) 🦀 2026-06-13  
+macOS & Windows WinUI: add hash type selection  
+macOS & Windows WinUI: add hash result export  
+Add Rust hash-core prototype and rewrite assessment  
+
 26.6.44 (153) 🌞 2026-06-02  
 Windows WinUI: update components  
 macOS: adopt Tahoe design  

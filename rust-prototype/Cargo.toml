@@ -1,0 +1,26 @@
+[package]
+name = "fhash_core"
+version = "0.1.0"
+edition = "2021"
+description = "Prototype Rust hash core for fHash — proves a C++ → Rust core swap is feasible behind a C FFI while keeping the native UIs untouched."
+license = "GPL-2.0"
+
+# staticlib  -> the .a we would link into the Swift / C++ / MFC apps via a C FFI
+# rlib       -> lets the unit tests and the demo binary use the crate directly
+[lib]
+name = "fhash_core"
+crate-type = ["staticlib", "rlib"]
+
+[dependencies]
+md-5 = "0.10"
+sha1 = "0.10"
+sha2 = "0.10"
+hex = "0.4"
+
+[[bin]]
+name = "fhash_demo"
+path = "src/bin/demo.rs"
+
+[profile.release]
+opt-level = 3
+lto = true

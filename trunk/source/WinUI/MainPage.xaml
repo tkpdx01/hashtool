@@ -51,6 +51,7 @@
                     <ColumnDefinition Width="Auto" />
                     <ColumnDefinition Width="Auto" />
                     <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="Auto" />
                     <ColumnDefinition Width="*" />
                     <ColumnDefinition Width="Auto" />
                     <ColumnDefinition Width="Auto" />
@@ -78,9 +79,17 @@
                     TabIndex="3"
                     Unchecked="CheckBoxUppercase_Unchecked" />
 
+                <DropDownButton
+                    x:Name="DropDownButtonHash"
+                    Grid.Column="2"
+                    Margin="20,0,0,10"
+                    VerticalAlignment="Bottom"
+                    Content="Hash"
+                    TabIndex="6" />
+
                 <TextBlock
                     x:Name="TextBlockSpeed"
-                    Grid.Column="2"
+                    Grid.Column="3"
                     Margin="5,0,0,18"
                     VerticalAlignment="Bottom"
                     Text="[Speed]" />
@@ -88,7 +97,7 @@
                 <Button
                     x:Name="ButtonClear"
                     x:Uid="ButtonClear"
-                    Grid.Column="4"
+                    Grid.Column="5"
                     Margin="0,0,10,10"
                     HorizontalAlignment="Right"
                     VerticalAlignment="Bottom"
@@ -99,7 +108,7 @@
                 <Button
                     x:Name="ButtonVerify"
                     x:Uid="ButtonVerify"
-                    Grid.Column="5"
+                    Grid.Column="6"
                     Margin="0,0,10,10"
                     HorizontalAlignment="Right"
                     VerticalAlignment="Bottom"
@@ -115,7 +124,7 @@
                 <Button
                     x:Name="ButtonOpen"
                     x:Uid="ButtonOpen"
-                    Grid.Column="6"
+                    Grid.Column="7"
                     Width="70"
                     Margin="0,0,10,10"
                     HorizontalAlignment="Right"

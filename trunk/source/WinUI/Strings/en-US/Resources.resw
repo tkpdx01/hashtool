@@ -210,4 +210,10 @@
   <data name="AboutTitle" xml:space="preserve">
     <value>About fHash</value>
   </data>
+  <data name="ButtonHashMenu" xml:space="preserve">
+    <value>Hash</value>
+  </data>
+  <data name="MenuExport" xml:space="preserve">
+    <value>Export Results...</value>
+  </data>
 </root>

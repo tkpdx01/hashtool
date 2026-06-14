@@ -198,4 +198,10 @@
   <data name="AboutTitle" xml:space="preserve">
     <value>关于 fHash</value>
   </data>
+  <data name="ButtonHashMenu" xml:space="preserve">
+    <value>哈希</value>
+  </data>
+  <data name="MenuExport" xml:space="preserve">
+    <value>导出结果...</value>
+  </data>
 </root>

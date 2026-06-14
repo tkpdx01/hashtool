@@ -34,7 +34,29 @@ namespace FilesHashWUI
             MainPageWaitingExit, // waiting thread stop and exit
         };
 
+        // Which hash types to display (and export). The engine always computes
+        // all four in a single file pass; this is a display/export filter only.
+        [Flags]
+        private enum DisplayHashType
+        {
+            None = 0,
+            MD5 = 1 << 0,
+            SHA1 = 1 << 1,
+            SHA256 = 1 << 2,
+            SHA512 = 1 << 3,
+            All = MD5 | SHA1 | SHA256 | SHA512,
+        };
+
+        private static readonly (string Label, DisplayHashType Type)[] s_hashMenuEntries =
+        [
+            ("MD5", DisplayHashType.MD5),
+            ("SHA1", DisplayHashType.SHA1),
+            ("SHA256", DisplayHashType.SHA256),
+            ("SHA512", DisplayHashType.SHA512),
+        ];
+
         private const string KeyUppercase = "Uppercase";
+        private const string KeyDisplayHashTypes = "DisplayHashTypes";
         private const string ArgPaths = "-paths";
 
         private MainWindow m_mainWindow = null;
@@ -60,6 +82,11 @@ namespace FilesHashWUI
         private MainPageControlStat m_mainPageStat;
 
         private bool m_uppercaseChecked = false;
+
+        private DisplayHashType m_displayHashTypes = DisplayHashType.All;
+        // Terminal per-file results (ResultAll / ResultError), kept for display
+        // rebuild on hash-type change and for export.
+        private readonly List<ResultDataNet> m_resultDataList = [];
 
         private int m_inMainQueue = 0;
         private int m_outMainQueue = 0;
@@ -248,6 +275,7 @@ namespace FilesHashWUI
                     if (newStat == MainPageControlStat.MainPageNone)
                     {
                         m_hyperlinksMain.Clear();
+                        m_resultDataList.Clear();
                         m_mainWindow.HashMgmt.Clear();
 
                         ProgressBarMain.Value = 0;
@@ -269,6 +297,7 @@ namespace FilesHashWUI
                     ButtonClear.IsEnabled = true;
                     ButtonVerify.IsEnabled = true;
                     CheckBoxUppercase.IsEnabled = true;
+                    DropDownButtonHash.IsEnabled = true;
                     break;
                 case MainPageControlStat.MainPageCalcIng:
                     CloseAboutPage();
@@ -281,6 +310,7 @@ namespace FilesHashWUI
                     ButtonClear.IsEnabled = false;
                     ButtonVerify.IsEnabled = false;
                     CheckBoxUppercase.IsEnabled = false;
+                    DropDownButtonHash.IsEnabled = false;
 
                     BringWindowToFront();
                     break;
@@ -343,6 +373,217 @@ namespace FilesHashWUI
                     runInHyperlink.Text = hyperLinkText;
                 }
             }
+        }
+
+        private void LoadDisplayHashTypes()
+        {
+            object objTypes = WinUIHelper.LoadLocalSettings(KeyDisplayHashTypes);
+            if (objTypes is int intTypes)
+            {
+                m_displayHashTypes = (DisplayHashType)intTypes & DisplayHashType.All;
+            }
+            if (m_displayHashTypes == DisplayHashType.None)
+            {
+                m_displayHashTypes = DisplayHashType.All; // never leave nothing to show
+            }
+        }
+
+        private void InitHashMenuFlyout()
+        {
+            DropDownButtonHash.Content = m_resourceLoaderMain.GetString("ButtonHashMenu");
+
+            MenuFlyout menuFlyout = new();
+            foreach ((string label, DisplayHashType type) in s_hashMenuEntries)
+            {
+                ToggleMenuFlyoutItem item = new()
+                {
+                    Text = label,
+                    Tag = (int)type,
+                    IsChecked = m_displayHashTypes.HasFlag(type),
+                };
+                item.Click += HashTypeMenuItem_Click;
+                menuFlyout.Items.Add(item);
+            }
+
+            menuFlyout.Items.Add(new MenuFlyoutSeparator());
+
+            MenuFlyoutItem exportItem = new()
+            {
+                Text = m_resourceLoaderMain.GetString("MenuExport"),
+            };
+            exportItem.Click += MenuExport_Click;
+            menuFlyout.Items.Add(exportItem);
+
+            DropDownButtonHash.Flyout = menuFlyout;
+        }
+
+        private void HashTypeMenuItem_Click(object sender, RoutedEventArgs e)
+        {
+            if (sender is not ToggleMenuFlyoutItem item)
+            {
+                return;
+            }
+
+            // ToggleMenuFlyoutItem flips IsChecked before Click fires.
+            DisplayHashType type = (DisplayHashType)(int)item.Tag;
+            DisplayHashType newTypes = m_displayHashTypes;
+            if (item.IsChecked)
+            {
+                newTypes |= type;
+            }
+            else
+            {
+                newTypes &= ~type;
+            }
+
+            // Keep at least one hash type visible.
+            if (newTypes == DisplayHashType.None)
+            {
+                item.IsChecked = true;
+                return;
+            }
+
+            m_displayHashTypes = newTypes;
+            WinUIHelper.SaveLocalSettings(KeyDisplayHashTypes, (int)m_displayHashTypes);
+
+            // Re-render already calculated results with the new selection.
+            if (m_mainPageStat == MainPageControlStat.MainPageCalcFinish)
+            {
+                RefreshResultText();
+            }
+        }
+
+        private void RefreshResultText()
+        {
+            // Only rebuild the main result view (not the find/verify view).
+            if (m_mainPageStat == MainPageControlStat.MainPageVerify)
+            {
+                return;
+            }
+
+            UpdateUppercaseStat();
+
+            // Reset streaming queue/counters before rebuilding.
+            m_inlinesQueue.Clear();
+            m_inMainQueue = 0;
+            m_outMainQueue = 0;
+
+            // Rebuild result paragraph from the stored results.
+            m_paragraphMain = m_paragraphResult;
+            m_hyperlinksMain = m_hyperlinksResult;
+            m_paragraphResult.Inlines.Clear();
+            m_hyperlinksResult.Clear();
+
+            foreach (ResultDataNet resultData in m_resultDataList)
+            {
+                AppendFileResultToTextMain(resultData, m_uppercaseChecked);
+            }
+            AppendInlinesQueueToTextMain();
+
+            m_inMainQueue = 0;
+            m_outMainQueue = 0;
+        }
+
+        private bool HasExportableResults()
+        {
+            return m_resultDataList.Count > 0;
+        }
+
+        private string BuildResultsPlainText()
+        {
+            UpdateUppercaseStat();
+            bool uppercase = m_uppercaseChecked;
+
+            const string nl = "\r\n";
+            System.Text.StringBuilder sb = new();
+            foreach (ResultDataNet r in m_resultDataList)
+            {
+                if (r.EnumState == ResultStateNet.ResultNone)
+                {
+                    continue;
+                }
+
+                // File name.
+                sb.Append(m_resourceLoaderMain.GetString("ResultFileName"));
+                sb.Append(' ');
+                sb.Append(r.Path);
+                sb.Append(nl);
+
+                // Meta (size + modified date).
+                if (r.EnumState == ResultStateNet.ResultAll || r.EnumState == ResultStateNet.ResultMeta)
+                {
+                    string strShortSize = WinUIHelper.ConvertSizeToShortSizeStr(r.Size);
+                    sb.Append(m_resourceLoaderMain.GetString("ResultFileSize"));
+                    sb.Append(' ');
+                    sb.Append(r.Size);
+                    sb.Append(' ');
+                    sb.Append(m_resourceLoaderMain.GetString("ResultByte"));
+                    if (!string.IsNullOrEmpty(strShortSize))
+                    {
+                        sb.Append(" (");
+                        sb.Append(strShortSize);
+                        sb.Append(')');
+                    }
+                    sb.Append(nl);
+                    sb.Append(m_resourceLoaderMain.GetString("ResultModifiedTime"));
+                    sb.Append(' ');
+                    sb.Append(r.ModifiedDate);
+                    sb.Append(nl);
+                }
+
+                // Hashes (respect the selected hash types and uppercase setting).
+                if (r.EnumState == ResultStateNet.ResultAll)
+                {
+                    foreach ((string label, DisplayHashType type) in s_hashMenuEntries)
+                    {
+                        if (!m_displayHashTypes.HasFlag(type))
+                        {
+                            continue;
+                        }
+                        string value = HashValueForType(r, type);
+                        value = uppercase ? value.ToUpper() : value.ToLower();
+                        sb.Append(label);
+                        sb.Append(": ");
+                        sb.Append(value);
+                        sb.Append(nl);
+                    }
+                }
+
+                // Error.
+                if (r.EnumState == ResultStateNet.ResultError)
+                {
+                    sb.Append(r.Error);
+                    sb.Append(nl);
+                }
+
+                sb.Append(nl);
+            }
+
+            return sb.ToString();
+        }
+
+        private async void MenuExport_Click(object sender, RoutedEventArgs e)
+        {
+            if (!HasExportableResults())
+            {
+                return;
+            }
+
+            string text = BuildResultsPlainText();
+
+            FileSavePicker picker = new();
+            InitializeWithWindow.Initialize(picker, m_mainWindow.HWNDHandle);
+            picker.SuggestedStartLocation = PickerLocationId.DocumentsLibrary;
+            picker.FileTypeChoices.Add("Text", new List<string>() { ".txt" });
+            picker.SuggestedFileName = "fHash-export";
+
+            StorageFile file = await picker.PickSaveFileAsync();
+            if (file == null)
+            {
+                return;
+            }
+
+            await FileIO.WriteTextAsync(file, text);
         }
 
         private bool IsAbleToCalcFiles()
@@ -500,46 +741,41 @@ namespace FilesHashWUI
             }
         }
 
+        private static string HashValueForType(ResultDataNet resultData, DisplayHashType type)
+        {
+            return type switch
+            {
+                DisplayHashType.MD5 => resultData.MD5,
+                DisplayHashType.SHA1 => resultData.SHA1,
+                DisplayHashType.SHA256 => resultData.SHA256,
+                DisplayHashType.SHA512 => resultData.SHA512,
+                _ => "",
+            };
+        }
+
         private void AppendFileHashToTextMain(ResultDataNet resultData, bool uppercase)
         {
             m_outMainQueue += 1;
-            string strFileMD5, strFileSHA1, strFileSHA256, strFileSHA512;
 
-            if (uppercase)
+            // Only show the hash types the user selected in the Hash menu.
+            foreach ((string label, DisplayHashType type) in s_hashMenuEntries)
             {
-                strFileMD5 = resultData.MD5.ToUpper();
-                strFileSHA1 = resultData.SHA1.ToUpper();
-                strFileSHA256 = resultData.SHA256.ToUpper();
-                strFileSHA512 = resultData.SHA512.ToUpper();
-            }
-            else
-            {
-                strFileMD5 = resultData.MD5.ToLower();
-                strFileSHA1 = resultData.SHA1.ToLower();
-                strFileSHA256 = resultData.SHA256.ToLower();
-                strFileSHA512 = resultData.SHA512.ToLower();
+                if (!m_displayHashTypes.HasFlag(type))
+                {
+                    continue;
+                }
+
+                string value = HashValueForType(resultData, type);
+                value = uppercase ? value.ToUpper() : value.ToLower();
+
+                m_inlinesQueue.Add(WinUIHelper.GenRunFromString(label + ": "));
+                Hyperlink hyperlink = GenHyperlinkFromStringForRichTextMain(value);
+                m_hyperlinksMain.Add(hyperlink);
+                m_inlinesQueue.Add(hyperlink);
+                m_inlinesQueue.Add(WinUIHelper.GenRunFromString("\r\n"));
             }
 
-            m_inlinesQueue.Add(WinUIHelper.GenRunFromString("MD5: "));
-            Hyperlink hyperlinkMD5 = GenHyperlinkFromStringForRichTextMain(strFileMD5);
-            m_hyperlinksMain.Add(hyperlinkMD5);
-            m_inlinesQueue.Add(hyperlinkMD5);
             m_inlinesQueue.Add(WinUIHelper.GenRunFromString("\r\n"));
-            m_inlinesQueue.Add(WinUIHelper.GenRunFromString("SHA1: "));
-            Hyperlink hyperlinkSHA1 = GenHyperlinkFromStringForRichTextMain(strFileSHA1);
-            m_hyperlinksMain.Add(hyperlinkSHA1);
-            m_inlinesQueue.Add(hyperlinkSHA1);
-            m_inlinesQueue.Add(WinUIHelper.GenRunFromString("\r\n"));
-            m_inlinesQueue.Add(WinUIHelper.GenRunFromString("SHA256: "));
-            Hyperlink hyperlinkSHA256 = GenHyperlinkFromStringForRichTextMain(strFileSHA256);
-            m_hyperlinksMain.Add(hyperlinkSHA256);
-            m_inlinesQueue.Add(hyperlinkSHA256);
-            m_inlinesQueue.Add(WinUIHelper.GenRunFromString("\r\n"));
-            m_inlinesQueue.Add(WinUIHelper.GenRunFromString("SHA512: "));
-            Hyperlink hyperlinkSHA512 = GenHyperlinkFromStringForRichTextMain(strFileSHA512);
-            m_hyperlinksMain.Add(hyperlinkSHA512);
-            m_inlinesQueue.Add(hyperlinkSHA512);
-            m_inlinesQueue.Add(WinUIHelper.GenRunFromString("\r\n\r\n"));
 
             if (CanUpdateTextMain())
             {
@@ -835,6 +1071,10 @@ namespace FilesHashWUI
                 CheckBoxUppercase.IsChecked = (bool)(objUppercase ?? false);
                 UpdateUppercaseStat(false);
 
+                // Load hash-type display filter and build the Hash menu.
+                LoadDisplayHashTypes();
+                InitHashMenuFlyout();
+
                 // Init stat
                 SetPageControlStat(MainPageControlStat.MainPageNone);
 
@@ -1036,13 +1276,21 @@ namespace FilesHashWUI
         private void UIBridgeHandlers_ShowFileHashHandler(ResultDataNet resultData, bool uppercase)
         {
             m_inMainQueue += 1;
-            DispatcherQueue.TryEnqueue(() => AppendFileHashToTextMain(resultData, uppercase));
+            DispatcherQueue.TryEnqueue(() =>
+            {
+                m_resultDataList.Add(resultData);
+                AppendFileHashToTextMain(resultData, uppercase);
+            });
         }
 
         private void UIBridgeHandlers_ShowFileErrHandler(ResultDataNet resultData)
         {
             m_inMainQueue += 1;
-            DispatcherQueue.TryEnqueue(() => AppendFileErrToTextMain(resultData));
+            DispatcherQueue.TryEnqueue(() =>
+            {
+                m_resultDataList.Add(resultData);
+                AppendFileErrToTextMain(resultData);
+            });
         }
 
         private void UIBridgeHandlers_UpdateProgWholeHandler(int value)

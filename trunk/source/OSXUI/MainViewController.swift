@@ -7,9 +7,24 @@
 //
 
 import Cocoa
+import UniformTypeIdentifiers
 
 let UpperCaseDefaultKey = "upperCaseKey"
+let DisplayHashTypesDefaultKey = "displayHashTypesKey"
 let FindBarAtBelowAfter26 = true
+
+// Which hash types to display (and export). The engine always computes all
+// four in a single file pass; this is a display/export filter only.
+struct DisplayHashType: OptionSet {
+    let rawValue: Int
+
+    static let md5    = DisplayHashType(rawValue: 1 << 0)
+    static let sha1   = DisplayHashType(rawValue: 1 << 1)
+    static let sha256 = DisplayHashType(rawValue: 1 << 2)
+    static let sha512 = DisplayHashType(rawValue: 1 << 3)
+
+    static let all: DisplayHashType = [.md5, .sha1, .sha256, .sha512]
+}
 
 private struct MainViewControllerState: OptionSet {
     let rawValue: Int
@@ -72,6 +87,8 @@ private struct MainViewControllerState: OptionSet {
 
     private var upperCaseState = false
 
+    private var displayHashTypes: DisplayHashType = .all
+
     private var inMainQueue: Int = 0
     private var outMainQueue: Int = 0
     private let maxDiffQueue = 3
@@ -119,13 +136,15 @@ private struct MainViewControllerState: OptionSet {
         }
 
         // Register NSUserDefaults.
-        let defaultsDictionary = [
-            UpperCaseDefaultKey: Bool(false)
+        let defaultsDictionary: [String: Any] = [
+            UpperCaseDefaultKey: Bool(false),
+            DisplayHashTypesDefaultKey: DisplayHashType.all.rawValue
         ]
         UserDefaults.standard.register(defaults: defaultsDictionary)
 
         // Load NSUserDefaults.
         let defaultUpperCase = UserDefaults.standard.bool(forKey: UpperCaseDefaultKey)
+        self.loadDisplayHashTypes()
 
         // Alloc bridge.
         hashBridge = HashBridge(controller: self)
@@ -138,6 +157,10 @@ private struct MainViewControllerState: OptionSet {
 
         let fileMenu = self.getFileMenu()
         fileMenu?.autoenablesItems = false
+
+        // Add "Hash" menu (display filter) and "Export Results…" file menu item.
+        self.setupHashMenu()
+        self.setupExportMenuItem()
 
         // Set buttons title.
         verifyButton.title = MacSwiftUtils.GetStringFromRes("MAINDLG_VERIFY")
@@ -701,39 +724,30 @@ private struct MainViewControllerState: OptionSet {
 
         nsmutStrHash.beginEditing()
 
-        var oldLength:Int = 0
+        // Only show the hash types the user selected in the Hash menu.
+        let hashEntries: [(String, String, DisplayHashType)] = [
+            ("MD5", strFileMD5, .md5),
+            ("SHA1", strFileSHA1, .sha1),
+            ("SHA256", strFileSHA256, .sha256),
+            ("SHA512", strFileSHA512, .sha512)
+        ]
 
-        // MD5
-        MacSwiftUtils.AppendStringToNSMutableAttributedString(nsmutStrHash, "MD5: ")
-        oldLength = nsmutStrHash.length
-        MacSwiftUtils.AppendStringToNSMutableAttributedString(nsmutStrHash, strFileMD5)
-        nsmutStrHash.addAttribute(.link,
-                                  value: strFileMD5,
-                                  range: NSRange(location: oldLength, length: strFileMD5.count))
+        var isFirstHash = true
+        for (label, value, type) in hashEntries {
+            if !displayHashTypes.contains(type) {
+                continue
+            }
 
-        // SHA1
-        MacSwiftUtils.AppendStringToNSMutableAttributedString(nsmutStrHash, "\nSHA1: ")
-        oldLength = nsmutStrHash.length
-        MacSwiftUtils.AppendStringToNSMutableAttributedString(nsmutStrHash, strFileSHA1)
-        nsmutStrHash.addAttribute(.link,
-                                  value: strFileSHA1,
-                                  range: NSRange(location: oldLength, length: strFileSHA1.count))
+            let prefix = isFirstHash ? "\(label): " : "\n\(label): "
+            isFirstHash = false
 
-        // SHA256
-        MacSwiftUtils.AppendStringToNSMutableAttributedString(nsmutStrHash, "\nSHA256: ")
-        oldLength = nsmutStrHash.length
-        MacSwiftUtils.AppendStringToNSMutableAttributedString(nsmutStrHash, strFileSHA256)
-        nsmutStrHash.addAttribute(.link,
-                                  value: strFileSHA256,
-                                  range: NSRange(location: oldLength, length: strFileSHA256.count))
-
-        // SHA512
-        MacSwiftUtils.AppendStringToNSMutableAttributedString(nsmutStrHash, "\nSHA512: ")
-        oldLength = nsmutStrHash.length
-        MacSwiftUtils.AppendStringToNSMutableAttributedString(nsmutStrHash, strFileSHA512)
-        nsmutStrHash.addAttribute(.link,
-                                  value: strFileSHA512,
-                                  range: NSRange(location: oldLength, length: strFileSHA512.count))
+            MacSwiftUtils.AppendStringToNSMutableAttributedString(nsmutStrHash, prefix)
+            let oldLength = nsmutStrHash.length
+            MacSwiftUtils.AppendStringToNSMutableAttributedString(nsmutStrHash, value)
+            nsmutStrHash.addAttribute(.link,
+                                      value: value,
+                                      range: NSRange(location: oldLength, length: value.count))
+        }
 
         MacSwiftUtils.AppendStringToNSMutableAttributedString(nsmutStrHash, "\n\n")
 
@@ -992,5 +1006,218 @@ private struct MainViewControllerState: OptionSet {
         }
 
         return false
+    }
+
+    // MARK: - Hash type selection (Hash menu)
+
+    private static let HashMenuItemIdentifier = NSUserInterfaceItemIdentifier("fHashHashMenu")
+
+    private static let hashMenuEntries: [(String, DisplayHashType)] = [
+        ("MD5", .md5),
+        ("SHA1", .sha1),
+        ("SHA256", .sha256),
+        ("SHA512", .sha512)
+    ]
+
+    private func loadDisplayHashTypes() {
+        var types = DisplayHashType(rawValue: UserDefaults.standard.integer(forKey: DisplayHashTypesDefaultKey))
+        types.formIntersection(.all) // ignore stray bits
+        if types.isEmpty {
+            types = .all // never leave nothing to show
+        }
+        displayHashTypes = types
+    }
+
+    private func setupHashMenu() {
+        guard let mainMenu = NSApp.mainMenu else {
+            return
+        }
+
+        // Avoid duplicating the menu (e.g. multiple windows).
+        if mainMenu.items.contains(where: { $0.identifier == MainViewController.HashMenuItemIdentifier }) {
+            return
+        }
+
+        let hashMenuItem = NSMenuItem()
+        hashMenuItem.identifier = MainViewController.HashMenuItemIdentifier
+        hashMenuItem.title = MacSwiftUtils.GetStringFromRes("MAINMENU_HASH")
+
+        let hashMenu = NSMenu(title: hashMenuItem.title)
+        hashMenu.autoenablesItems = false
+
+        for (label, type) in MainViewController.hashMenuEntries {
+            let item = NSMenuItem(title: label,
+                                  action: #selector(self.toggleHashTypeMenuItem(_:)),
+                                  keyEquivalent: "")
+            item.target = self
+            item.tag = type.rawValue
+            item.state = displayHashTypes.contains(type) ? .on : .off
+            hashMenu.addItem(item)
+        }
+
+        hashMenuItem.submenu = hashMenu
+
+        // Place "Hash" right before the Window menu (after Edit), or append near the end.
+        let windowIndex = mainMenu.indexOfItem(withTitle: "Window")
+        let insertIndex = (windowIndex >= 0) ? windowIndex : max(mainMenu.items.count - 1, 0)
+        mainMenu.insertItem(hashMenuItem, at: insertIndex)
+    }
+
+    @objc func toggleHashTypeMenuItem(_ sender: NSMenuItem) {
+        let type = DisplayHashType(rawValue: sender.tag)
+
+        var newTypes = displayHashTypes
+        if newTypes.contains(type) {
+            // Keep at least one hash type visible.
+            if newTypes == type {
+                NSSound.beep()
+                return
+            }
+            newTypes.remove(type)
+        } else {
+            newTypes.insert(type)
+        }
+
+        displayHashTypes = newTypes
+        sender.state = newTypes.contains(type) ? .on : .off
+        UserDefaults.standard.set(newTypes.rawValue, forKey: DisplayHashTypesDefaultKey)
+
+        // Re-render already calculated results with the new selection.
+        if state == .CALC_FINISH {
+            self.refreshResultText()
+        }
+    }
+
+    // MARK: - Export results
+
+    private func setupExportMenuItem() {
+        guard let fileMenu = self.getFileMenu() else {
+            return
+        }
+
+        if fileMenu.indexOfItem(withTarget: self, andAction: #selector(self.exportResults(_:))) >= 0 {
+            return // already added
+        }
+
+        let exportItem = NSMenuItem(title: MacSwiftUtils.GetStringFromRes("MAINDLG_EXPORT"),
+                                    action: #selector(self.exportResults(_:)),
+                                    keyEquivalent: "e")
+        exportItem.keyEquivalentModifierMask = [.command, .shift]
+        exportItem.target = self
+        if !MacSwiftUtils.IsSystemEarlierThan(26, 0) {
+            exportItem.image = NSImage(systemSymbolName: "square.and.arrow.up", accessibilityDescription: nil)
+        }
+
+        // Insert right after "Open…" (index 0).
+        let insertIndex = min(1, fileMenu.items.count)
+        fileMenu.insertItem(exportItem, at: insertIndex)
+    }
+
+    private func hasExportableResults() -> Bool {
+        guard let results = hashBridge?.getResults() else {
+            return false
+        }
+        for result in results {
+            if let resultSwift = result as? ResultDataSwift,
+               resultSwift.state != ResultDataSwift.RESULT_NONE {
+                return true
+            }
+        }
+        return false
+    }
+
+    private func buildResultsPlainText() -> String {
+        self.updateUpperCaseState()
+        let uppercase = upperCaseState
+
+        var output = ""
+        let results: [Any] = hashBridge?.getResults() ?? []
+        for result in results {
+            guard let r = result as? ResultDataSwift, r.state != ResultDataSwift.RESULT_NONE else {
+                continue
+            }
+
+            // File name.
+            output += MacSwiftUtils.GetStringFromRes("FILENAME_STRING") + " " + r.strPath + "\n"
+
+            // Meta (size + modified date).
+            if r.state == ResultDataSwift.RESULT_ALL || r.state == ResultDataSwift.RESULT_META {
+                let strShortSize = MacSwiftUtils.ConvertSizeToShortSizeStr(r.ulSize)
+                output += MacSwiftUtils.GetStringFromRes("FILESIZE_STRING") + " "
+                output += String(format: "%llu", r.ulSize) + " "
+                output += MacSwiftUtils.GetStringFromRes("BYTE_STRING")
+                if !strShortSize.isEmpty {
+                    output += " (" + strShortSize + ")"
+                }
+                output += "\n"
+                output += MacSwiftUtils.GetStringFromRes("MODIFYTIME_STRING") + " " + r.strMDate + "\n"
+            }
+
+            // Hashes (respect the selected hash types and uppercase setting).
+            if r.state == ResultDataSwift.RESULT_ALL {
+                let hashEntries: [(String, String, DisplayHashType)] = [
+                    ("MD5", r.strMD5, .md5),
+                    ("SHA1", r.strSHA1, .sha1),
+                    ("SHA256", r.strSHA256, .sha256),
+                    ("SHA512", r.strSHA512, .sha512)
+                ]
+                for (label, value, type) in hashEntries where displayHashTypes.contains(type) {
+                    let shown = uppercase ? value.uppercased() : value.lowercased()
+                    output += label + ": " + shown + "\n"
+                }
+            }
+
+            // Error.
+            if r.state == ResultDataSwift.RESULT_ERROR {
+                output += r.strError + "\n"
+            }
+
+            output += "\n"
+        }
+
+        return output
+    }
+
+    @objc func exportResults(_ sender: Any?) {
+        guard let window = view.window else {
+            return
+        }
+
+        if !self.hasExportableResults() {
+            NSSound.beep()
+            return
+        }
+
+        let text = self.buildResultsPlainText()
+
+        let savePanel = NSSavePanel()
+        savePanel.allowedContentTypes = [.plainText]
+        savePanel.canCreateDirectories = true
+        savePanel.nameFieldStringValue = "fHash-export.txt"
+
+        savePanel.beginSheetModal(for: window) { response in
+            guard response == .OK, let url = savePanel.url else {
+                return
+            }
+            do {
+                try text.write(to: url, atomically: true, encoding: .utf8)
+            } catch {
+                let alert = NSAlert(error: error)
+                alert.beginSheetModal(for: window)
+            }
+        }
+    }
+
+    // MARK: - Menu validation
+
+    func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+        if menuItem.action == #selector(self.exportResults(_:)) {
+            return self.hasExportableResults()
+        }
+        if menuItem.action == #selector(self.toggleHashTypeMenuItem(_:)) {
+            menuItem.state = displayHashTypes.contains(DisplayHashType(rawValue: menuItem.tag)) ? .on : .off
+            return true
+        }
+        return true
     }
 }

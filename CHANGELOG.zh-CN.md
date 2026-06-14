@@ -1,3 +1,8 @@
+26.7.47 (156) 🦀 2026-06-13  
+macOS 与 Windows WinUI: 增加哈希类型选择  
+macOS 与 Windows WinUI: 增加哈希结果导出  
+增加 Rust 哈希核心原型与重构评估  
+
 26.6.44 (153) 🌞 2026-06-02  
 Windows WinUI: 更新组件  
 macOS: 适配 Tahoe 设计  
